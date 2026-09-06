@@ -1,0 +1,13 @@
+name: incidentlab
+version: 0.2.0
+description: "Observe sanitized terminal/API failures and inject scoped prevention context on the next turn."
+author: "Agent Incident Lab contributors"
+entry: hermes_plugin.py
+provides_hooks:
+  - api_request_error
+  - post_tool_call
+  - pre_llm_call
+hooks:
+  - api_request_error
+  - post_tool_call
+  - pre_llm_call
