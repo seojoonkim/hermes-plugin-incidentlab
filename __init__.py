@@ -45,7 +45,8 @@ def register(ctx):
             return
         try:
             parsed = json.loads(result) if isinstance(result, str) else result
-            failed = isinstance(parsed, dict) and (parsed.get("success") is False or parsed.get("error") or
+            benign = isinstance(parsed, dict) and "not an error" in str(parsed.get("exit_code_meaning") or "")
+            failed = isinstance(parsed, dict) and not benign and (parsed.get("success") is False or parsed.get("error") or
                 isinstance(parsed.get("exit_code"), int) and parsed["exit_code"] != 0)
         except (ValueError, TypeError):
             failed = bool(re.search(r"\b(error|failed|traceback)\b", str(result), re.I))
@@ -54,17 +55,25 @@ def register(ctx):
             _save(ctx, session_id, task_id, "tool:" + safe_tool + ":error")
 
     def pre_llm(*, session_id="", **kwargs):
+        # Report each incident once per new occurrence, not on every later turn:
+        # re-injecting the same reminder made every follow-up request drag in
+        # unrelated remediation work and slowed the user's actual task.
         if not session_id:
             return None
-        rows = [r for r in (ctx.state.get("incidents", default=[]) or [])
-                if r.get("session_id") == session_id and r.get("status") == "open"][-5:]
-        if not rows:
+        all_rows = list(ctx.state.get("incidents", default=[]) or [])
+        fresh = [r for r in all_rows
+                 if r.get("session_id") == session_id and r.get("status") == "open"
+                 and int(r.get("count", 1)) > int(r.get("reported_count", 0))][-5:]
+        if not fresh:
             return None
-        items = "\n".join("- " + r["failure"] + " (observed " + str(r.get("count", 1)) + "x)" for r in rows)
-        return {"context": ("[Incident Lab — observed failures, not root-cause conclusions]\n" + items +
-            "\nFinish the current user request. Then diagnose the cause, add a reproducing check, "
-            "apply an authorized prevention fix, verify it, and report unresolved boundaries. "
-            "Do not fabricate evidence, expand permissions, or restart services unless required.")[:1800]}
+        for r in fresh:
+            r["reported_count"] = int(r.get("count", 1))
+        ctx.state.set("incidents", all_rows[-MAX_INCIDENTS:])
+        items = "\n".join("- " + r["failure"] + " (observed " + str(r.get("count", 1)) + "x)" for r in fresh)
+        return {"context": ("[Incident Lab - new failures since last turn; observations, not conclusions]\n" + items +
+            "\nPrioritize the user's current request. If one of these blocks it, handle it within that work; "
+            "otherwise do not start separate remediation unless the user asks. Do not fabricate evidence, "
+            "expand permissions, or restart services.")[:1800]}
 
     ctx.register_hook("api_request_error", api_error)
     ctx.register_hook("post_tool_call", post_tool)
